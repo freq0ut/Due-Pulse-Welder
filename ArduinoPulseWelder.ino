@@ -1,10 +1,19 @@
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// Arduino Pulse Welding System
+// ARDUINO PULSE WELDING SYSTEM
 // Written by: Zack Goyetche
-// Date: 2/9/2015                                                  v3.0
+// Date: 2/21/2015                                                v11.0
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// y = 34.361x + 5.4224
+// where y is the current and x is the voltage
+// need to find relationship between analog write value and voltage, substitute into x
+
+//Note: Pin 31 - Grey
+//      Pin 33 - Purple
+//      Pin 35 - Blue
+//      Pin 37 - Green
 
 #include "LiquidCrystal.h"
 #include "piezoNotes.h"
@@ -14,8 +23,9 @@
 #define slope2 0.0006593406593406593
 
 //INTEGERS
-int rs=22,rw=24,en=26,d0=40,d1=42,d2=44,d3=46,d4=28,d5=30,d6=32,d7=34,led=36,oe=38,pulseEnable=48,melodyPin = 5;
-int asig,bsig,counter,lastCounter,posCounter;
+int rs=22,rw=24,en=26,d0=40,d1=42,d2=44,d3=46,d4=28,d5=30,d6=32,d7=34,led=36,oe=38,
+	fourTMode=48,melodyPin = 5,ledPin = 52,upSlopePin = A0, downSlopePin = A1, fourTPin = A2;
+int asig,bsig,counter,lastCounter,posCounter,slopeTime;
 int encoderPin1 = 2;
 int encoderPin2 = 3;
 int encoderSwitchPin = 4; //push button switch
@@ -25,7 +35,9 @@ int song = 0;
 float peak,bkgnd,freq,duty,outHigh,outLow, freqPointHigh, freqPointLow;
 
 //BOOLEANS
-boolean pushbuttonToggle, ccToggle, ccwToggle, menuSelectToggle, inMenu, incToggle, decToggle, upSlopeToggle;
+boolean pushbuttonToggle, ccToggle, ccwToggle, menuSelectToggle, inMenu, incToggle, decToggle, upSlopeToggle,
+		downSlopeToggle, downSlopeSet, stepOneToggle, stepTwoToggle, stepThreeToggle, stepFourToggle, twoT_oneToggle,
+		twoT_twoToggle;
 
 //LCD DECLARATIONS (rs, rw, en, d0, d1, d2, d3, d4, d5, d6, d7)
 LiquidCrystal lcd(rs,rw,en,d0,d1,d2,d3,d4,d5,d6,d7);
@@ -33,10 +45,10 @@ LiquidCrystal lcd(rs,rw,en,d0,d1,d2,d3,d4,d5,d6,d7);
 //SETUP-----------------------------------------------------------------
 void setup()
 {
-	//Serial.begin (9600);
+	Serial.begin (9600);
 	
 	//PIN DECLARATIONS
-	pinMode(5, OUTPUT);//buzzer
+	pinMode(5, OUTPUT); //buzzer
 	pinMode(rs, OUTPUT);
 	pinMode(rw, OUTPUT);
 	pinMode(en, OUTPUT);
@@ -45,31 +57,37 @@ void setup()
 	pinMode(d6, OUTPUT);
 	pinMode(d7, OUTPUT);
 	pinMode(led, OUTPUT);
+	pinMode(ledPin, OUTPUT);
 	pinMode(oe, OUTPUT);	
 	pinMode(encoderPin1, INPUT);
 	pinMode(encoderPin2, INPUT);
 	pinMode(encoderSwitchPin, INPUT);
-	pinMode(pulseEnable, INPUT);
+	pinMode(fourTMode, INPUT);
+	pinMode(upSlopePin, INPUT);
+	pinMode(downSlopePin, INPUT);
+	pinMode(fourTPin, INPUT);
 	
 	//PIN STATES
 	digitalWrite(encoderPin1, HIGH); //turn pullup resistor on
 	digitalWrite(encoderPin2, HIGH); //turn pullup resistor on
 	digitalWrite(encoderSwitchPin, HIGH); //turn pullup resistor on
+	digitalWrite(ledPin, HIGH);
 	analogWriteResolution(12);
-	//digitalWrite(pulseEnable, LOW);
 	
 	//INITIAL VARIABLE DECLARATIONS
-	peak = 130.00;
+	peak = 125.00;
 	bkgnd = 33.00;
 	freq = 33.0;
-	duty = 33;
+	duty = 33.0;
 	// ^^RULE OF 33's^^
-	
 	posCounter = 0;
-	outHigh = ((130.0/slope)-0.6)/slope2;
-	outLow = ((33.0/slope)-0.6)/slope2;
-	freqPointHigh = int(333333); //initilization of time spent high
-	freqPointLow = int(666666); //initialization of time spent low
+	outHigh = ((125.0/slope)-0.6)/slope2; //peak current set analogWrite value from 0-4095
+	outLow = ((33.0/slope)-0.6)/slope2; //bkgnd current set analogWrite value from 0-4095
+	freqPointHigh = int(1000000.0/freq*(duty/100.0)); //initilization of time spent high
+	freqPointLow = int((1000000.0/freq)*((100.0-duty)/100.0)); //initialization of time spent low
+	
+	//ADJUSTABLE PARAMETERS
+	slopeTime = 3; //this sets speed of upslope/downslope
 	
 	//INITIAL BOOLEAN DECLARATIONS
 	pushbuttonToggle = false;
@@ -79,7 +97,13 @@ void setup()
 	inMenu = false;
 	incToggle = false;
 	decToggle = false;
-	upSlopeToggle = true;
+	downSlopeSet = false;
+	stepOneToggle = true;
+	stepTwoToggle = false;
+	stepThreeToggle = false;
+	stepFourToggle = false;
+	twoT_oneToggle = true;
+	twoT_twoToggle = false;
 	
 	//INTERRUPTS
 	attachInterrupt(encoderPin1, A_RISE, RISING);
@@ -102,22 +126,25 @@ void setup()
 	lcd.print("       System");
 	lcd.setCursor(0,3);
 	lcd.print("        v1.0");
-	sing(1);
+	sing();
 	delayMicroseconds(100);
 	lcd.clear();
 	lcd.setCursor(0,0);
 	lcd.print(">");
+	digitalWrite(ledPin, LOW);
 }
 
 //MAIN LOOP-------------------------------------------------------------
 void loop()
 {
+	if(digitalRead(fourTMode) == HIGH)
+		fourT();
+	else
+		twoT();
 	mainMenu();
 	buttonScan();
 	encoderScan();
 	menuSelect();
-	while(digitalRead(pulseEnable) == HIGH) //this is pin 40
-		pulseOut();	
 }
 
 //INPUT EVENT FUNCTIONS (ROTARY ENCODER)--------------------------------
@@ -178,6 +205,19 @@ void buttonScan()
 		menuSelectToggle = true;
 		pushbuttonToggle = false;
 	}
+	if(digitalRead(upSlopePin == HIGH))
+	{
+		upSlopeToggle = true;
+	}
+	else
+		upSlopeToggle = false;
+	if(digitalRead(downSlopePin == HIGH))
+	{
+		downSlopeToggle = true;
+	}
+	else
+		downSlopeToggle = false;
+	
 }
 
 void encoderScan()
@@ -350,6 +390,7 @@ void peakMenu()
 			peak = peak + 5;
 			incToggle = false;
 		}
+		
 		if(menuSelectToggle == true)
 		{
 			inMenu = false;
@@ -369,22 +410,246 @@ void bkgndMenu()
 		lcd.print("SET BACKGRND CURRENT");
 		lcd.setCursor(0,2);
 		lcd.print("BACK: ");
-		lcd.setCursor(6,2);
-		lcd.print(int(bkgnd));
+		if(bkgnd < 100)
+		{
+			lcd.setCursor(6,2);
+			lcd.print(int(bkgnd));
+			lcd.setCursor(8,2);
+			lcd.print("  ");
+		}
+		else
+			lcd.print(int(bkgnd));
 		lcd.setCursor(10,2);
 		lcd.print("Amps");
 		encoderScan();
 		buttonScan();
-		if(decToggle == true && bkgnd >= 5)
+		
+		if(decToggle == true && bkgnd == 20)
+		{
+			bkgnd = bkgnd;
+			decToggle = false;
+		}
+		
+		if(decToggle == true && bkgnd == 25)
 		{
 			bkgnd = bkgnd - 5;
 			decToggle = false;
 		}
-		if(incToggle == true && bkgnd <= 155)
+		if(decToggle == true && bkgnd == 30)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 33)
+		{
+			bkgnd = bkgnd - 3;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 35)
+		{
+			bkgnd = bkgnd - 2;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 40)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 45)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 50)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 55)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 60)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 65)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 70)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 75)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 80)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 85)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 90)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 95)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 100)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 105)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 110)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 115)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && bkgnd == 120)
+		{
+			bkgnd = bkgnd - 5;
+			decToggle = false;
+		}
+		
+		
+		
+		
+		if(incToggle == true && bkgnd == 120)
+		{
+			bkgnd = bkgnd;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 115)
 		{
 			bkgnd = bkgnd + 5;
 			incToggle = false;
 		}
+		if(incToggle == true && bkgnd == 110)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 105)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 100)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 95)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 90)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 85)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 80)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 75)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 70)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 65)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 60)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 55)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 50)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 45)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 40)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 35)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 33)
+		{
+			bkgnd = bkgnd + 2;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 30)
+		{
+			bkgnd = bkgnd + 3;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 25)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && bkgnd == 20)
+		{
+			bkgnd = bkgnd + 5;
+			incToggle = false;
+		}
+		
 		if(menuSelectToggle == true)
 		{
 			inMenu = false;
@@ -515,16 +780,130 @@ void dutyMenu()
 		
 		encoderScan();
 		buttonScan();
-		if(decToggle == true && duty >= 30)
+		if(decToggle == true && duty == 25)
+		{
+			duty = duty;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 30)
 		{
 			duty = duty - 5;
 			decToggle = false;
 		}
-		if(incToggle == true && duty <= 70)
+		if(decToggle == true && duty == 33)
+		{
+			duty = duty - 3;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 35)
+		{
+			duty = duty - 2;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 40)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 45)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 50)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 55)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 60)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 65)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 70)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		if(decToggle == true && duty == 75)
+		{
+			duty = duty - 5;
+			decToggle = false;
+		}
+		
+		
+		if(incToggle == true && duty == 75)
+		{
+			duty = duty;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 70)
 		{
 			duty = duty + 5;
 			incToggle = false;
 		}
+		if(incToggle == true && duty == 65)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 60)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 55)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 50)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 45)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 40)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 35)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 33)
+		{
+			duty = duty + 2;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 30)
+		{
+			duty = duty + 3;
+			incToggle = false;
+		}
+		if(incToggle == true && duty == 25)
+		{
+			duty = duty + 5;
+			incToggle = false;
+		}
+		
+		
 		if(menuSelectToggle == true)
 		{
 			inMenu = false;
@@ -562,12 +941,6 @@ void pulseOut()
 	//if upslope, step up output current at a constant slope proportional to both
 	//min/max current and the frequency of pulsing.
 	
-	if(upSlopeToggle == true)
-	{
-		void upSlope();
-		upSlopeToggle = false;
-	}
-	
 	analogWrite(outputPin,outHigh);
 	delayMicroseconds(freqPointHigh);
 	analogWrite(outputPin,outLow);
@@ -576,9 +949,8 @@ void pulseOut()
 
 void upSlope()
 {
-	float differential = outHigh - outLow;
-	float upSlopeWrite;
-	int j;
+	float differential = outHigh - outLow; //this value is the difference between peak and bkgnd current settings
+	float upSlopeWrite; //declare this value for upSlope analog writes
 	
 	// in order to upslope proportional to the frequency, there must be a scaling factor that
 	// that correlates with the number of intermediate values and the set frequency.
@@ -587,22 +959,135 @@ void upSlope()
 	// n = 10*freq --> freq of 10 per second, there will be 100 intermediate steps, each taking 1/10th of a second
 	// 1/10th of a second * 100 = 10 seconds.
 	int n;
-	n = 10*freq;
+	int j;
+	n = slopeTime*freq;
+	float segment = differential/n;
+	upSlopeWrite = outLow;
 	
-	for(j=n;n<0;n--)
+	for(j=n;j>0;j--)
 	{
-		upSlopeWrite = outLow + differential/n;
-		analogWrite(outputPin,int(upSlopeWrite));
+		//Serial.println(upSlopeWrite);
+		analogWrite(outputPin,upSlopeWrite);
 		delayMicroseconds(freqPointHigh);
 		analogWrite(outputPin,outLow);
 		delayMicroseconds(freqPointLow);
+		upSlopeWrite = upSlopeWrite + segment;
 	}
+	//pulseOut();
 }
 
 void downSlope()
 {
-	//once shut down is detected, ramp down current from background to 0 
-	//over a period of time...
+	float differential = outHigh - outLow; //this value is the difference between peak and bkgnd current settings
+	float downSlopeWrite; //declare this value for upSlope analog writes
+	
+	// in order to upslope proportional to the frequency, there must be a scaling factor that
+	// that correlates with the number of intermediate values and the set frequency.
+	// example ... if i want the upSlope to always take 10 seconds, then there should be
+	// n intermediate values per second.
+	// n = 10*freq --> freq of 10 per second, there will be 100 intermediate steps, each taking 1/10th of a second
+	// 1/10th of a second * 100 = 10 seconds.
+	
+	int n;
+	int j;
+	n = slopeTime*freq;
+	float segment = differential/n;
+	downSlopeWrite = outHigh;
+	
+	for(j=n;j>0;j--)
+	{
+		//Serial.println(upSlopeWrite);
+		analogWrite(outputPin,downSlopeWrite);
+		delayMicroseconds(freqPointHigh);
+		analogWrite(outputPin,outLow);
+		delayMicroseconds(freqPointLow);
+		downSlopeWrite = downSlopeWrite - segment;
+	}
+	analogWrite(outputPin,0); //shuts off (this is 2T mode with downSlope)
+}
+
+void fourT()
+{
+	//*******STEP 1*******
+	if(stepOneToggle == true && digitalRead(fourTPin) == HIGH)
+	{
+		digitalWrite(ledPin, HIGH);
+		stepOneToggle = false;
+		stepTwoToggle = true;
+		while(digitalRead(fourTPin) == HIGH)
+		{
+			analogWrite(outputPin,outLow);
+		}
+	}
+	
+	//*******STEP 2*******
+	if(stepTwoToggle == true && digitalRead(fourTPin) == LOW)
+	{
+		stepTwoToggle = false;
+		stepThreeToggle = true;
+		upSlope();
+		while(digitalRead(fourTPin) == LOW)
+		{
+			pulseOut();
+		}
+	}
+	
+	//*******STEP 3*******
+	if(stepThreeToggle == true && digitalRead(fourTPin) == HIGH)
+	{
+		stepThreeToggle = false;
+		stepFourToggle = true;
+		downSlope();
+		while(digitalRead(fourTPin) == HIGH)
+		{
+			analogWrite(outputPin,outLow);
+		}
+	}
+	
+	//*******STEP 4*******
+	if(stepFourToggle == true && digitalRead(fourTPin) == LOW)
+	{
+		stepFourToggle = false;
+		stepOneToggle = true;
+		analogWrite(outputPin,0);
+		digitalWrite(ledPin,LOW);	
+	}	
+}
+
+void twoT()
+{
+	if(digitalRead(fourTPin) == HIGH && twoT_oneToggle == true) //upSlope enabled condition
+	{
+		twoT_oneToggle = false;
+		twoT_twoToggle = true;
+		digitalWrite(ledPin, HIGH);
+		if(digitalRead(downSlopePin) == HIGH) //check to see if downSlope is enabled
+			downSlopeSet = true; //set boolean to initiate downSlope on shut off
+		if(digitalRead(upSlopePin) == HIGH)
+			upSlope(); //call upSlope function
+		while(digitalRead(fourTPin) == HIGH)
+		{
+			
+		}
+		while(digitalRead(fourTPin) == LOW)
+			pulseOut(); //begin pulsing
+	}
+	if(digitalRead(fourTPin) == HIGH && twoT_twoToggle == true) //downslope not working! led not turning off!
+	{
+		twoT_twoToggle = false;
+		twoT_oneToggle = true;
+		if(downSlopeSet == true)
+		{
+			downSlopeSet = false;
+			downSlope();
+		}
+		analogWrite(outputPin, 0);
+		digitalWrite(ledPin, LOW);
+		while(digitalRead(fourTPin) == HIGH)
+		{
+			
+		}
+	}
 }
 
 void footPedal()
@@ -640,173 +1125,26 @@ int introTempo[] =
 	12, 12, 12, 12
 };
 
-int melody[] =
-{
-	NOTE_E7, NOTE_E7, 0, NOTE_E7,
-	0, NOTE_C7, NOTE_E7, 0,
-	NOTE_G7, 0, 0,  0,
-	NOTE_G6, 0, 0, 0,
-	
-	NOTE_C7, 0, 0, NOTE_G6,
-	0, 0, NOTE_E6, 0,
-	0, NOTE_A6, 0, NOTE_B6,
-	0, NOTE_AS6, NOTE_A6, 0,
-	
-	NOTE_G6, NOTE_E7, NOTE_G7,
-	NOTE_A7, 0, NOTE_F7, NOTE_G7,
-	0, NOTE_E7, 0, NOTE_C7,
-	NOTE_D7, NOTE_B6, 0, 0,
-	
-	NOTE_C7, 0, 0, NOTE_G6,
-	0, 0, NOTE_E6, 0,
-	0, NOTE_A6, 0, NOTE_B6,
-	0, NOTE_AS6, NOTE_A6, 0,
-	
-	NOTE_G6, NOTE_E7, NOTE_G7,
-	NOTE_A7, 0, NOTE_F7, NOTE_G7,
-	0, NOTE_E7, 0, NOTE_C7,
-	NOTE_D7, NOTE_B6, 0, 0
-};
-
-int tempo[] =
-{
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	
-	9, 9, 9,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	
-	9, 9, 9,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-	12, 12, 12, 12,
-};
-
-int underworld_melody[] =
-{
-	NOTE_C4, NOTE_C5, NOTE_A3, NOTE_A4,
-	NOTE_AS3, NOTE_AS4, 0,
-	0,
-	NOTE_C4, NOTE_C5, NOTE_A3, NOTE_A4,
-	NOTE_AS3, NOTE_AS4, 0,
-	0,
-	NOTE_F3, NOTE_F4, NOTE_D3, NOTE_D4,
-	NOTE_DS3, NOTE_DS4, 0,
-	0,
-	NOTE_F3, NOTE_F4, NOTE_D3, NOTE_D4,
-	NOTE_DS3, NOTE_DS4, 0,
-	0, NOTE_DS4, NOTE_CS4, NOTE_D4,
-	NOTE_CS4, NOTE_DS4,
-	NOTE_DS4, NOTE_GS3,
-	NOTE_G3, NOTE_CS4,
-	NOTE_C4, NOTE_FS4, NOTE_F4, NOTE_E3, NOTE_AS4, NOTE_A4,
-	NOTE_GS4, NOTE_DS4, NOTE_B3,
-	NOTE_AS3, NOTE_A3, NOTE_GS3,
-	0, 0, 0
-};
-
-int underworld_tempo[] = {
-	12, 12, 12, 12,
-	12, 12, 6,
-	3,
-	12, 12, 12, 12,
-	12, 12, 6,
-	3,
-	12, 12, 12, 12,
-	12, 12, 6,
-	3,
-	12, 12, 12, 12,
-	12, 12, 6,
-	6, 18, 18, 18,
-	6, 6,
-	6, 6,
-	6, 6,
-	18, 18, 18, 18, 18, 18,
-	10, 10, 10,
-	10, 10, 10,
-	3, 3, 3
-};
-
-void sing(int s)
+void sing()
 {
 	// iterate over the notes of the melody:
-	song = s;
-	if (song == 2)
+	int size = sizeof(intro) / sizeof(int);
+	for (int thisNote = 0; thisNote < size; thisNote++)
 	{
-		int size = sizeof(underworld_melody) / sizeof(int);
-		for (int thisNote = 0; thisNote < size; thisNote++)
-		{
-			// to calculate the note duration, take one second
-			// divided by the note type.
-			//e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
-			int noteDuration = 1000 / underworld_tempo[thisNote];
+		// to calculate the note duration, take one second
+		// divided by the note type.
+		//e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
+		int noteDuration = 1000 / introTempo[thisNote];
 			
-			buzz(melodyPin, underworld_melody[thisNote], noteDuration);
+		buzz(melodyPin, intro[thisNote], noteDuration);
 			
-			// to distinguish the notes, set a minimum time between them.
-			// the note's duration + 30% seems to work well:
-			int pauseBetweenNotes = noteDuration * 1.30;
-			delay(pauseBetweenNotes);
+		// to distinguish the notes, set a minimum time between them.
+		// the note's duration + 30% seems to work well:
+		int pauseBetweenNotes = noteDuration * 1.30;
+		delay(pauseBetweenNotes);
 			
-			// stop the tone playing:
-			buzz(melodyPin, 0, noteDuration);
-		}
-	}	
-	else if(song == 1)
-	{
-		int size = sizeof(intro) / sizeof(int);
-		for (int thisNote = 0; thisNote < size; thisNote++)
-		{
-			// to calculate the note duration, take one second
-			// divided by the note type.
-			//e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
-			int noteDuration = 1000 / introTempo[thisNote];
-			
-			buzz(melodyPin, intro[thisNote], noteDuration);
-			
-			// to distinguish the notes, set a minimum time between them.
-			// the note's duration + 30% seems to work well:
-			int pauseBetweenNotes = noteDuration * 1.30;
-			delay(pauseBetweenNotes);
-			
-			// stop the tone playing:
-			buzz(melodyPin, 0, noteDuration);
-		}
-	}	
-	else
-	{
-		int size = sizeof(melody) / sizeof(int);
-		for (int thisNote = 0; thisNote < size; thisNote++)
-		{
-			// to calculate the note duration, take one second
-			// divided by the note type.
-			//e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
-			int noteDuration = 1000 / tempo[thisNote];
-			
-			buzz(melodyPin, melody[thisNote], noteDuration);
-			
-			// to distinguish the notes, set a minimum time between them.
-			// the note's duration + 30% seems to work well:
-			int pauseBetweenNotes = noteDuration * 1.30;
-			delay(pauseBetweenNotes);
-			
-			// stop the tone playing:
-			buzz(melodyPin, 0, noteDuration);
-		}
+		// stop the tone playing:
+		buzz(melodyPin, 0, noteDuration);
 	}
 }
 
